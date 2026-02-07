@@ -1,0 +1,17 @@
+// Shell Switcher - Keybindings
+// This file is managed by shell-switch for the switcher and launcher bindings
+// Current shell: {{SHELL_NAME}}
+// You can add additional shell-specific keybindings below the managed section
+
+binds {
+    // === MANAGED BY SHELL-SWITCH - DO NOT EDIT THIS SECTION ===
+
+    // App Launcher for {{SHELL_NAME}}
+    Mod+Space hotkey-overlay-title="Open {{SHELL_NAME}} Launcher" {
+        spawn {{LAUNCHER_CMD_ARGS}};
+    }
+
+    // === END MANAGED SECTION ===
+
+    // Add your custom shell-specific keybindings below:
+}

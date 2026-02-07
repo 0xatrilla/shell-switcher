@@ -1,0 +1,5 @@
+// Shell Switcher - Startup Configuration
+// This file is managed by shell-switch - manual edits will be overwritten
+// Current shell: {{SHELL_NAME}}
+
+spawn-at-startup {{LAUNCH_CMD_ARGS}}

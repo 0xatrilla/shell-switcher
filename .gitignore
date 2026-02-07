@@ -1,0 +1,9 @@
+# User-specific files
+config.json
+shell-switch.log
+backups/
+
+# Editor files
+*.swp
+*~
+.vscode/

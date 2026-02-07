@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+# shell-switch - Interactive TUI for switching desktop shells
+# Uses fzf for shell selection and manages the complete switching process
+
+set -euo pipefail
+
+# Script directory - resolve symlinks to get actual location
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+# Source libraries
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/compositor.sh"
+source "${SCRIPT_DIR}/lib/shell-manager.sh"
+
+# Config file path
+CONFIG_FILE="${SHELL_SWITCH_DIR}/config.json"
+
+#######################################
+# Load current shell from config.json
+# Outputs:
+#   Shell ID to stdout
+# Returns:
+#   0 on success, 1 on failure
+#######################################
+load_current_shell() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        error "Config file not found: $CONFIG_FILE"
+        error "Please run the install script first"
+        return 1
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        error "jq is not installed"
+        return 1
+    fi
+
+    local current_shell
+    current_shell=$(jq -r '.current_shell' "$CONFIG_FILE")
+
+    if [[ -z "$current_shell" || "$current_shell" == "null" ]]; then
+        error "Could not determine current shell from config"
+        return 1
+    fi
+
+    echo "$current_shell"
+}
+
+#######################################
+# Save current shell to config.json
+# Arguments:
+#   $1 - Shell ID
+# Returns:
+#   0 on success, 1 on failure
+#######################################
+save_current_shell() {
+    local shell_id="$1"
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        error "Config file not found: $CONFIG_FILE"
+        return 1
+    fi
+
+    # Update config.json
+    local temp_file
+    temp_file=$(mktemp)
+
+    if jq --arg shell "$shell_id" \
+          --arg timestamp "$(date -Iseconds)" \
+          '.current_shell = $shell | .last_switch = $timestamp | .switch_count += 1' \
+          "$CONFIG_FILE" > "$temp_file"; then
+        mv "$temp_file" "$CONFIG_FILE"
+        log "INFO" "Updated config: current_shell=$shell_id"
+        return 0
+    else
+        error "Failed to update config file"
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
+#######################################
+# Generate config file from template
+# Arguments:
+#   $1 - Template file path
+#   $2 - Output file path
+#   $3 - Shell ID
+# Returns:
+#   0 on success, 1 on failure
+#######################################
+generate_config_from_template() {
+    local template_file="$1"
+    local output_file="$2"
+    local shell_id="$3"
+
+    if [[ ! -f "$template_file" ]]; then
+        error "Template file not found: $template_file"
+        return 1
+    fi
+
+    local shell_name
+    shell_name=$(get_shell_info "$shell_id" "name")
+    local launch_cmd
+    launch_cmd=$(get_shell_info "$shell_id" "launch_cmd")
+    local launcher_cmd
+    launcher_cmd=$(get_shell_info "$shell_id" "launcher_cmd")
+
+    # For KDL files, we need to format the commands as quoted arguments
+    local launch_cmd_args
+    local launcher_cmd_args
+
+    # Convert "cmd arg1 arg2" to "cmd" "arg1" "arg2"
+    launch_cmd_args=$(echo "$launch_cmd" | awk '{for(i=1;i<=NF;i++) printf "\"%s\" ", $i}' | sed 's/ $//')
+    launcher_cmd_args=$(echo "$launcher_cmd" | awk '{for(i=1;i<=NF;i++) printf "\"%s\" ", $i}' | sed 's/ $//')
+
+    # Read template and substitute variables
+    sed -e "s|{{SHELL_NAME}}|${shell_name}|g" \
+        -e "s|{{LAUNCH_CMD}}|${launch_cmd}|g" \
+        -e "s|{{LAUNCHER_CMD}}|${launcher_cmd}|g" \
+        -e "s|{{LAUNCH_CMD_ARGS}}|${launch_cmd_args}|g" \
+        -e "s|{{LAUNCHER_CMD_ARGS}}|${launcher_cmd_args}|g" \
+        "$template_file" > "$output_file"
+
+    if [[ $? -eq 0 ]]; then
+        log "INFO" "Generated config: $output_file"
+        return 0
+    else
+        error "Failed to generate config from template"
+        return 1
+    fi
+}
+
+#######################################
+# Update compositor config files for new shell
+# Arguments:
+#   $1 - Compositor name
+#   $2 - New shell ID
+# Returns:
+#   0 on success, 1 on failure
+#######################################
+update_compositor_configs() {
+    local compositor="$1"
+    local new_shell="$2"
+
+    local startup_config
+    startup_config=$(get_startup_config_path "$compositor")
+    local binds_config
+    binds_config=$(get_binds_config_path "$compositor")
+
+    # Backup existing configs
+    if [[ -f "$startup_config" ]]; then
+        backup_file "$startup_config" || return 1
+    fi
+    if [[ -f "$binds_config" ]]; then
+        backup_file "$binds_config" || return 1
+    fi
+
+    # Generate new configs from templates
+    local template_dir="${SCRIPT_DIR}/templates/${compositor}"
+
+    if [[ "$compositor" == "niri" ]]; then
+        generate_config_from_template \
+            "${template_dir}/shell-start.kdl.template" \
+            "$startup_config" \
+            "$new_shell" || return 1
+
+        generate_config_from_template \
+            "${template_dir}/shell-binds.kdl.template" \
+            "$binds_config" \
+            "$new_shell" || return 1
+    elif [[ "$compositor" == "hyprland" ]]; then
+        generate_config_from_template \
+            "${template_dir}/shell-start.conf.template" \
+            "$startup_config" \
+            "$new_shell" || return 1
+
+        generate_config_from_template \
+            "${template_dir}/shell-binds.conf.template" \
+            "$binds_config" \
+            "$new_shell" || return 1
+    fi
+
+    success "Updated compositor configuration files"
+    return 0
+}
+
+#######################################
+# Build fzf menu entries
+# Arguments:
+#   $1 - Current shell ID
+# Outputs:
+#   fzf menu entries to stdout
+#######################################
+build_fzf_menu() {
+    local current_shell="$1"
+    local shells
+    shells=$(get_all_shells)
+
+    for shell in $shells; do
+        local shell_name
+        shell_name=$(get_shell_info "$shell" "name")
+
+        if [[ "$shell" == "$current_shell" ]]; then
+            echo "${ICON_ACTIVE} ${shell_name} (active)|${shell}"
+        else
+            echo "${ICON_INACTIVE} ${shell_name}|${shell}"
+        fi
+    done
+}
+
+#######################################
+# Show shell switcher TUI using fzf
+# Arguments:
+#   $1 - Current shell ID
+# Outputs:
+#   Selected shell ID to stdout
+# Returns:
+#   0 on success, 1 if cancelled
+#######################################
+show_switcher_tui() {
+    local current_shell="$1"
+
+    if ! command -v fzf &>/dev/null; then
+        error "fzf is not installed"
+        return 1
+    fi
+
+    local menu
+    menu=$(build_fzf_menu "$current_shell")
+
+    local selected
+    selected=$(echo "$menu" | fzf \
+        --prompt="Select shell: " \
+        --height=40% \
+        --border=rounded \
+        --reverse \
+        --ansi \
+        --no-info \
+        --delimiter='|' \
+        --with-nth=1 \
+        --header="Current compositor: $(detect_compositor)")
+
+    if [[ -z "$selected" ]]; then
+        log "INFO" "User cancelled shell selection"
+        return 1
+    fi
+
+    # Extract shell ID from selection
+    local shell_id
+    shell_id=$(echo "$selected" | cut -d'|' -f2)
+
+    echo "$shell_id"
+}
+
+#######################################
+# Main switching logic
+# Returns:
+#   0 on success, 1 on failure
+#######################################
+main() {
+    log "INFO" "=== Shell Switcher Started ==="
+
+    # Check dependencies
+    if ! require_dependencies fzf jq pgrep pkill; then
+        error "Missing required dependencies"
+        exit 1
+    fi
+
+    # Detect compositor
+    local compositor
+    if ! compositor=$(detect_compositor); then
+        error "Could not detect compositor (niri or hyprland)"
+        error "Are you running niri or hyprland?"
+        exit 1
+    fi
+
+    info "Detected compositor: $compositor"
+
+    # Load current shell from config
+    local current_shell
+    if ! current_shell=$(load_current_shell); then
+        exit 1
+    fi
+
+    local current_name
+    current_name=$(get_shell_info "$current_shell" "name")
+    info "Current shell: $current_name"
+
+    # Show TUI and get selection
+    local new_shell
+    if ! new_shell=$(show_switcher_tui "$current_shell"); then
+        info "Shell switching cancelled"
+        exit 0
+    fi
+
+    # Check if same shell selected
+    if [[ "$new_shell" == "$current_shell" ]]; then
+        info "$current_name is already active"
+        exit 0
+    fi
+
+    local new_name
+    new_name=$(get_shell_info "$new_shell" "name")
+
+    echo ""
+    info "Switching from $current_name to $new_name..."
+    echo ""
+
+    # Update compositor configs BEFORE switching
+    if ! update_compositor_configs "$compositor" "$new_shell"; then
+        error "Failed to update compositor configurations"
+        error "Aborting switch"
+        exit 1
+    fi
+
+    # Perform the shell switch
+    if ! switch_shell "$current_shell" "$new_shell"; then
+        error "Shell switch failed"
+
+        # Try to restore configs
+        warning "Restoring previous configurations..."
+        local startup_config
+        startup_config=$(get_startup_config_path "$compositor")
+        local binds_config
+        binds_config=$(get_binds_config_path "$compositor")
+
+        restore_backup "$startup_config"
+        restore_backup "$binds_config"
+
+        exit 1
+    fi
+
+    # Update config.json
+    if ! save_current_shell "$new_shell"; then
+        warning "Shell switched successfully, but failed to update config file"
+    fi
+
+    # Success message
+    echo ""
+    success "Successfully switched to $new_name!"
+
+    log "INFO" "=== Shell Switcher Completed Successfully ==="
+}
+
+# Run main
+main "$@"

@@ -1,0 +1,13 @@
+# Shell Switcher - Keybindings
+# This file is managed by shell-switch for the switcher and launcher bindings
+# Current shell: {{SHELL_NAME}}
+# You can add additional shell-specific keybindings below the managed section
+
+# === MANAGED BY SHELL-SWITCH - DO NOT EDIT THIS SECTION ===
+
+# App Launcher for {{SHELL_NAME}}
+bind = SUPER, Space, exec, {{LAUNCHER_CMD}}
+
+# === END MANAGED SECTION ===
+
+# Add your custom shell-specific keybindings below:
