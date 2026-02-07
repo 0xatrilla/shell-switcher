@@ -1,4 +1,13 @@
-# Shell Switcher
+```
+                                                                               
+ ▄▄▄▄▄▄▄ ▄▄          ▄▄ ▄▄    ▄▄▄▄▄▄▄                        ▄▄                
+█████▀▀▀ ██          ██ ██   █████▀▀▀         ▀▀  ██         ██                
+ ▀████▄  ████▄ ▄█▀█▄ ██ ██    ▀████▄  ██   ██ ██ ▀██▀▀ ▄████ ████▄ ▄█▀█▄ ████▄ 
+   ▀████ ██ ██ ██▄█▀ ██ ██      ▀████ ██ █ ██ ██  ██   ██    ██ ██ ██▄█▀ ██ ▀▀ 
+███████▀ ██ ██ ▀█▄▄▄ ██ ██   ███████▀  ██▀██  ██▄ ██   ▀████ ██ ██ ▀█▄▄▄ ██    
+                                                                               
+
+```
 
 TUI for switching between desktop shells (e.g. Noctalia, DMS) on niri or hyprland. Run `shell-switch`, pick a shell from the menu, and it stops the current one and starts the selected one. Config and keybindings are updated automatically.
 
